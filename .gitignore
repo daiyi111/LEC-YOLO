@@ -1,0 +1,8 @@
+*.pt 
+*.pth 
+*.weights 
+/runs/ 
+/datasets/ 
+/data/ 
+*.log 
+*.zip 
