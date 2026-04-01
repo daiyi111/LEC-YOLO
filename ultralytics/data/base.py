@@ -100,7 +100,7 @@ class BaseDataset(Dataset):
         elif self.cache == "disk" and self.check_cache_disk():
             self.cache_images()
 
-        # Transforms
+        # Transforms  这里是对图像做变换操作 至关重要
         self.transforms = self.build_transforms(hyp=hyp)
 
     def get_img_files(self, img_path):

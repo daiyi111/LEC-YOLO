@@ -1,0 +1,8 @@
+path: E:\\daiyi\\python\\ultralytics\\ultralytics\\datasets\\TinyPerson
+train: images/train
+val: images/val
+test: images/test
+nc: 2
+names:
+  - earth_person
+  - sea_person

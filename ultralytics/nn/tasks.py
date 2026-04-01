@@ -6,7 +6,7 @@ import re
 import types
 from copy import deepcopy
 from pathlib import Path
-
+from .modules.addModules import *
 import torch
 import torch.nn as nn
 
@@ -23,6 +23,7 @@ from ultralytics.nn.modules import (
     SPP,
     SPPELAN,
     SPPF,
+    Improved_SPPF,
     AConv,
     ADown,
     Bottleneck,
@@ -61,6 +62,7 @@ from ultralytics.nn.modules import (
     Segment,
     WorldDetect,
     v10Detect,
+
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -83,6 +85,7 @@ from ultralytics.utils.torch_utils import (
     scale_img,
     time_sync,
 )
+
 
 try:
     import thop
@@ -148,8 +151,19 @@ class BaseModel(nn.Module):
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
-            x = m(x)  # run
-            y.append(x if m.i in self.save else None)  # save output
+            if hasattr(m, 'backbone'):
+                x = m(x)
+                if len(x) != 5:  # 0 - 5
+                    x.insert(0, None)
+                for index, i in enumerate(x):
+                    if index in self.save:
+                        y.append(i)
+                    else:
+                        y.append(None)
+                x = x[-1]  # 最后一个输出传给下一层
+            else:
+                x = m(x)  # run
+                y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
             if embed and m.i in embed:
@@ -288,8 +302,9 @@ class BaseModel(nn.Module):
         """
         if getattr(self, "criterion", None) is None:
             self.criterion = self.init_criterion()
-
+        # self.criterion(ignore_index=-1)
         preds = self.forward(batch["img"]) if preds is None else preds
+
         return self.criterion(preds, batch)
 
     def init_criterion(self):
@@ -318,7 +333,7 @@ class DetectionModel(BaseModel):
             self.yaml["nc"] = nc  # override YAML value
         self.model, self.save = parse_model(deepcopy(self.yaml), ch=ch, verbose=verbose)  # model, savelist
         self.names = {i: f"{i}" for i in range(self.yaml["nc"])}  # default names dict
-        self.inplace = self.yaml.get("inplace", True)
+        self.inplace = self.yaml.get("inplace", True) #为什么inplace是true
         self.end2end = getattr(self.model[-1], "end2end", False)
 
         # Build strides
@@ -956,7 +971,10 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         LOGGER.info(f"\n{'':>3}{'from':>20}{'n':>3}{'params':>10}  {'module':<45}{'arguments':<30}")
     ch = [ch]
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
-    for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
+    # enumerate 是 Python 中的一个内置函数，用于在遍历列表、元组等可迭代对象时，同时获取元素的索引（位置）和元素值。它的作用可以简单理解为“自动给元素编号”。
+    backbone= False
+    for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):
+        t=m
         m = getattr(torch.nn, m[3:]) if "nn." in m else globals()[m]  # get module
         for j, a in enumerate(args):
             if isinstance(a, str):
@@ -972,8 +990,11 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             GhostBottleneck,
             SPP,
             SPPF,
+            Improved_SPPF,
             C2fPSA,
             C2PSA,
+            C2PSA_SENetV1,
+            MSFR,
             DWConv,
             Focus,
             BottleneckCSP,
@@ -997,6 +1018,14 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             PSA,
             SCDown,
             C2fCIB,
+            LDConv,
+            C2PSA_SEAM,
+            ARConv,
+            C3k2_DFF_1,
+            C3k2_DFF_2,
+            Improved_C3k2_DFF,
+            PConv,
+            RFAConv
         }:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
@@ -1006,7 +1035,6 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 args[2] = int(
                     max(round(min(args[2], max_channels // 2 // 32)) * width, 1) if args[2] > 1 else args[2]
                 )  # num heads
-
             args = [c1, c2, *args[1:]]
             if m in {
                 BottleneckCSP,
@@ -1023,13 +1051,26 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 C2fPSA,
                 C2fCIB,
                 C2PSA,
+                C3k2_DFF_1,
+                C3k2_DFF_2,
+                Improved_C3k2_DFF,
+                C2PSA_SENetV1
+
             }:
                 args.insert(2, n)  # number of repeats
                 n = 1
-            if m is C3k2:  # for M/L/X sizes
+            if m in {C3k2,C3k2_DFF_1,C3k2_DFF_2}:  # for M/L/X sizes
                 legacy = False
                 if scale in "mlx":
                     args[3] = True
+        #             注意力机制
+        elif m in {SEAM,DICAM,MSCAAttention,SELayerV1,EMA}:
+            c2=ch[f]
+            args=[c2,*args]
+        elif m in {shufflenet_v1_x0_5,shufflenet_v1_x1_0,shufflenet_v1_x1_5,shufflenet_v1_x2_0}:
+            m=m()
+            c2=m.width_list
+            backbone=True
         elif m is AIFI:
             args = [ch[f], *args]
         elif m in {HGStem, HGBlock}:
@@ -1044,6 +1085,10 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
+        elif m is TFE:
+            c2=args[0]
+            c2 = make_divisible(min(c2, max_channels) * width, 8)
+            args[0]=c2
         elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect}:
             args.append([ch[x] for x in f])
             if m is Segment:
@@ -1060,18 +1105,26 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             c2 = ch[f[-1]]
         else:
             c2 = ch[f]
-
-        m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
-        t = str(m)[8:-2].replace("__main__.", "")  # module type
+        if isinstance(c2,list):
+            m_=m
+            m_.backbone=True
+        else:
+            m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
+            t = str(m)[8:-2].replace("__main__.", "")  # module type
         m_.np = sum(x.numel() for x in m_.parameters())  # number params
-        m_.i, m_.f, m_.type = i, f, t  # attach index, 'from' index, type
+        m_.i, m_.f, m_.type =i+4 if backbone else i, f, t  # attach index, 'from' index, type
         if verbose:
-            LOGGER.info(f"{i:>3}{str(f):>20}{n_:>3}{m_.np:10.0f}  {t:<45}{str(args):<30}")  # print
-        save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
+            LOGGER.info(f"{i:>3}{str(f):>20}{n_:>3}{m_.np:10.0f}  {t:<45}{str(args):<30}")
+        save.extend(x % (i+4 if backbone else i) for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
         layers.append(m_)
         if i == 0:
             ch = []
-        ch.append(c2)
+        if isinstance(c2,list):
+            ch.extend(c2)
+            if len(c2)!=5:
+                ch.insert(0,0)
+        else:
+            ch.append(c2)
     return nn.Sequential(*layers), sorted(save)
 
 

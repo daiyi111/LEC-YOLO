@@ -130,7 +130,7 @@ class BaseTrainer:
         # Model and Dataset
         self.model = check_model_file_from_stem(self.args.model)  # add suffix, i.e. yolov8n -> yolov8n.pt
         with torch_distributed_zero_first(LOCAL_RANK):  # avoid auto-downloading dataset multiple times
-            self.trainset, self.testset = self.get_dataset()
+            self.trainset,self.valset, self.testset = self.get_dataset()
         self.ema = None
 
         # Optimization utils init
@@ -281,13 +281,16 @@ class BaseTrainer:
         if self.batch_size < 1 and RANK == -1:  # single-GPU only, estimate best batch size
             self.args.batch = self.batch_size = self.auto_batch()
 
-        # Dataloaders
+        # Dataloaders  先构造YOLODataset类，再构造dataloader
         batch_size = self.batch_size // max(world_size, 1)
         self.train_loader = self.get_dataloader(self.trainset, batch_size=batch_size, rank=LOCAL_RANK, mode="train")
         if RANK in {-1, 0}:
             # Note: When training DOTA dataset, double batch size could get OOM on images with >2000 objects.
             self.test_loader = self.get_dataloader(
-                self.testset, batch_size=batch_size if self.args.task == "obb" else batch_size * 2, rank=-1, mode="val"
+                #todo 改进了训练时候的map评估数据集，改用验证集  速度更快 然后感觉没必要，本来就是看测试集的评估效果的，不用改成验证集
+                self.testset, batch_size=batch_size if self.args.task == "detect" else batch_size * 2, rank=-1, mode="val"
+                # self.valset, batch_size=batch_size if self.args.task == "obb" else batch_size * 2, rank=-1, mode="val"
+
             )
             self.validator = self.get_validator()
             metric_keys = self.validator.metrics.keys + self.label_loss_items(prefix="val")
@@ -320,6 +323,8 @@ class BaseTrainer:
         if world_size > 1:
             self._setup_ddp(world_size)
         self._setup_train(world_size)
+        boxes = np.concatenate([lb["bboxes"] for lb in self.train_loader.dataset.labels], 0)
+        cls = np.concatenate([lb["cls"] for lb in self.train_loader.dataset.labels], 0)
 
         nb = len(self.train_loader)  # number of batches
         nw = max(round(self.args.warmup_epochs * nb), 100) if self.args.warmup_epochs > 0 else -1  # warmup iterations
@@ -359,8 +364,16 @@ class BaseTrainer:
                 LOGGER.info(self.progress_string())
                 pbar = TQDM(enumerate(self.train_loader), total=nb)
             self.tloss = None
+            # todo 修改类别放入到batch中
+            cls = np.concatenate([lb["cls"] for lb in self.train_loader.dataset.labels], 0)
+            cls = torch.tensor(cls)
+            label_class, label_class_counts = cls.unique(return_counts=True)
+            label_class_dict = {}
+            for i in label_class.tolist():
+                label_class_dict[str(int(i))] = label_class_counts.tolist()[int(i)]
             for i, batch in pbar:
                 self.run_callbacks("on_train_batch_start")
+                batch['label_class_dict'] = label_class_dict  # todo 给batch添加类别信息
                 # Warmup
                 ni = i + nb * epoch
                 if ni <= nw:
@@ -565,7 +578,7 @@ class BaseTrainer:
         except Exception as e:
             raise RuntimeError(emojis(f"Dataset '{clean_url(self.args.data)}' error ❌ {e}")) from e
         self.data = data
-        return data["train"], data.get("val") or data.get("test")
+        return data["train"], data.get("val") , data.get("test")
 
     def setup_model(self):
         """Load/create/download model for any task."""

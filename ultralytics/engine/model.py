@@ -27,57 +27,7 @@ from ultralytics.utils import (
 
 
 class Model(nn.Module):
-    """
-    A base class for implementing YOLO models, unifying APIs across different model types.
 
-    This class provides a common interface for various operations related to YOLO models, such as training,
-    validation, prediction, exporting, and benchmarking. It handles different types of models, including those
-    loaded from local files, Ultralytics HUB, or Triton Server.
-
-    Attributes:
-        callbacks (Dict): A dictionary of callback functions for various events during model operations.
-        predictor (BasePredictor): The predictor object used for making predictions.
-        model (nn.Module): The underlying PyTorch model.
-        trainer (BaseTrainer): The trainer object used for training the model.
-        ckpt (Dict): The checkpoint data if the model is loaded from a *.pt file.
-        cfg (str): The configuration of the model if loaded from a *.yaml file.
-        ckpt_path (str): The path to the checkpoint file.
-        overrides (Dict): A dictionary of overrides for model configuration.
-        metrics (Dict): The latest training/validation metrics.
-        session (HUBTrainingSession): The Ultralytics HUB session, if applicable.
-        task (str): The type of task the model is intended for.
-        model_name (str): The name of the model.
-
-    Methods:
-        __call__: Alias for the predict method, enabling the model instance to be callable.
-        _new: Initializes a new model based on a configuration file.
-        _load: Loads a model from a checkpoint file.
-        _check_is_pytorch_model: Ensures that the model is a PyTorch model.
-        reset_weights: Resets the model's weights to their initial state.
-        load: Loads model weights from a specified file.
-        save: Saves the current state of the model to a file.
-        info: Logs or returns information about the model.
-        fuse: Fuses Conv2d and BatchNorm2d layers for optimized inference.
-        predict: Performs object detection predictions.
-        track: Performs object tracking.
-        val: Validates the model on a dataset.
-        benchmark: Benchmarks the model on various export formats.
-        export: Exports the model to different formats.
-        train: Trains the model on a dataset.
-        tune: Performs hyperparameter tuning.
-        _apply: Applies a function to the model's tensors.
-        add_callback: Adds a callback function for an event.
-        clear_callback: Clears all callbacks for an event.
-        reset_callbacks: Resets all callbacks to their default functions.
-
-    Examples:
-        >>> from ultralytics import YOLO
-        >>> model = YOLO("yolo11n.pt")
-        >>> results = model.predict("image.jpg")
-        >>> model.train(data="coco8.yaml", epochs=3)
-        >>> metrics = model.val()
-        >>> model.export(format="onnx")
-    """
 
     def __init__(
         self,
@@ -252,6 +202,7 @@ class Model(nn.Module):
         cfg_dict = yaml_model_load(cfg)
         self.cfg = cfg
         self.task = task or guess_model_task(cfg_dict)
+        # 创建一个DetectionModel类
         self.model = (model or self._smart_load("model"))(cfg_dict, verbose=verbose and RANK == -1)  # build model
         self.overrides["model"] = self.cfg
         self.overrides["task"] = self.task

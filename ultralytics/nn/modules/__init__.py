@@ -30,6 +30,7 @@ from .block import (
     SPP,
     SPPELAN,
     SPPF,
+    Improved_SPPF,
     AConv,
     ADown,
     Attention,
@@ -56,6 +57,8 @@ from .block import (
     RepVGGDW,
     ResNetLayer,
     SCDown,
+    # ARConv,
+    # ARConvBottleneck
 )
 from .conv import (
     CBAM,

@@ -168,9 +168,20 @@ class BaseValidator:
         bar = TQDM(self.dataloader, desc=self.get_desc(), total=len(self.dataloader))
         self.init_metrics(de_parallel(model))
         self.jdict = []  # empty before each val
+        # todo 添加的代码
+        if (trainer != None):
+            cls = np.concatenate([lb["cls"] for lb in trainer.train_loader.dataset.labels], 0)
+            cls = torch.tensor(cls)
+            label_class, label_class_counts = cls.unique(return_counts=True)
+            label_class_dict = {}
+            for i in label_class.tolist():
+                label_class_dict[str(int(i))] = label_class_counts.tolist()[int(i)]
+        #todo
         for batch_i, batch in enumerate(bar):
             self.run_callbacks("on_val_batch_start")
             self.batch_i = batch_i
+            if (trainer != None):
+                batch['label_class_dict'] = label_class_dict  # todo 给batch添加类别信息
             # Preprocess
             with dt[0]:
                 batch = self.preprocess(batch)

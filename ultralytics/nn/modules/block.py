@@ -4,7 +4,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from torchvision.models.video.resnet import Bottleneck
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
 from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
@@ -49,6 +49,8 @@ __all__ = (
     "Attention",
     "PSA",
     "SCDown",
+    "Improved_SPPF"
+
 )
 
 
@@ -186,6 +188,30 @@ class SPPF(nn.Module):
         y = [self.cv1(x)]
         y.extend(self.m(y[-1]) for _ in range(3))
         return self.cv2(torch.cat(y, 1))
+class Improved_SPPF(nn.Module):
+    """Spatial Pyramid Pooling - Fast (SPPF) layer for YOLOv5 by Glenn Jocher."""
+
+    def __init__(self, c1, c2, k=5):
+        """
+        Initializes the SPPF layer with given input/output channels and kernel size.
+
+        This module is equivalent to SPP(k=(5, 9, 13)).
+        """
+        super().__init__()
+        c_ = c1 // 2  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_ * 6, c2, 1, 1)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        self.mp= nn.AdaptiveMaxPool2d(1)
+        self.ap= nn.AdaptiveAvgPool2d(1)
+    def forward(self, x):
+        """Forward pass through Ghost Convolution block."""
+        t=self.cv1(x)
+        y = [self.cv1(x)]
+        y.extend(self.m(y[-1]) for _ in range(3))
+        y.append(self.mp(y[0]).expand_as(t))
+        y.append(self.ap(y[0]).expand_as(t))
+        return self.cv2(torch.cat(y, 1))
 
 
 class C1(nn.Module):
@@ -220,7 +246,6 @@ class C2(nn.Module):
         a, b = self.cv1(x).chunk(2, 1)
         return self.cv2(torch.cat((self.m(a), b), 1))
 
-
 class C2f(nn.Module):
     """Faster Implementation of CSP Bottleneck with 2 convolutions."""
 
@@ -246,9 +271,11 @@ class C2f(nn.Module):
         return self.cv2(torch.cat(y, 1))
 
 
+
+
 class C3(nn.Module):
     """CSP Bottleneck with 3 convolutions."""
-
+    # 16 16 2 true 0.25
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
         """Initialize the CSP Bottleneck with given channels, number, shortcut, groups, and expansion values."""
         super().__init__()
@@ -345,6 +372,8 @@ class Bottleneck(nn.Module):
     def forward(self, x):
         """Applies the YOLO FPN to input data."""
         return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
+
+
 
 
 class BottleneckCSP(nn.Module):
@@ -883,7 +912,7 @@ class Attention(nn.Module):
         pe (Conv): Convolutional layer for positional encoding.
     """
 
-    def __init__(self, dim, num_heads=8, attn_ratio=0.5):
+    def __init__(self, dim, attn_ratio=0.5,num_heads=8):
         """Initializes multi-head attention module with query, key, and value convolutions and positional encoding."""
         super().__init__()
         self.num_heads = num_heads
@@ -922,21 +951,6 @@ class Attention(nn.Module):
 
 class PSABlock(nn.Module):
     """
-    PSABlock class implementing a Position-Sensitive Attention block for neural networks.
-
-    This class encapsulates the functionality for applying multi-head attention and feed-forward neural network layers
-    with optional shortcut connections.
-
-    Attributes:
-        attn (Attention): Multi-head attention module.
-        ffn (nn.Sequential): Feed-forward neural network module.
-        add (bool): Flag indicating whether to add shortcut connections.
-
-    Methods:
-        forward: Performs a forward pass through the PSABlock, applying attention and feed-forward layers.
-
-    Examples:
-        Create a PSABlock and perform a forward pass
         >>> psablock = PSABlock(c=128, attn_ratio=0.5, num_heads=4, shortcut=True)
         >>> input_tensor = torch.randn(1, 128, 32, 32)
         >>> output_tensor = psablock(input_tensor)
@@ -1023,6 +1037,11 @@ class C2PSA(nn.Module):
         >>> c2psa = C2PSA(c1=256, c2=256, n=3, e=0.5)
         >>> input_tensor = torch.randn(1, 256, 64, 64)
         >>> output_tensor = c2psa(input_tensor)
+
+
+        >>>c2psa=C2PSA(c1=256,c2=256,n=1)
+        >>>input_tensor=torch.rand(1,256,32,32)
+        >>> output_tensor = c2psa(input_tensor)
     """
 
     def __init__(self, c1, c2, n=1, e=0.5):
@@ -1059,12 +1078,12 @@ class C2fPSA(C2f):
         forward_split: Performs a forward pass using split() instead of chunk().
 
     Examples:
-        >>> import torch
-        >>> from ultralytics.models.common import C2fPSA
-        >>> model = C2fPSA(c1=64, c2=64, n=3, e=0.5)
-        >>> x = torch.randn(1, 64, 128, 128)
-        >>> output = model(x)
-        >>> print(output.shape)
+        # >>> import torch
+        # >>> from ultralytics.models.common import C2fPSA
+        # >>> model = C2fPSA(c1=64, c2=64, n=3, e=0.5)
+        # >>> x = torch.randn(1, 64, 128, 128)
+        # >>> output = model(x)
+        # >>> print(output.shape)
     """
 
     def __init__(self, c1, c2, n=1, e=0.5):
@@ -1089,12 +1108,12 @@ class SCDown(nn.Module):
         forward: Applies the SCDown module to the input tensor.
 
     Examples:
-        >>> import torch
-        >>> from ultralytics import SCDown
-        >>> model = SCDown(c1=64, c2=128, k=3, s=2)
-        >>> x = torch.randn(1, 64, 128, 128)
-        >>> y = model(x)
-        >>> print(y.shape)
+        # >>> import torch
+        # >>> from ultralytics import SCDown
+        # >>> model = SCDown(c1=64, c2=128, k=3, s=2)
+        # >>> x = torch.randn(1, 64, 128, 128)
+        # >>> y = model(x)
+        # >>> print(y.shape)
         torch.Size([1, 128, 64, 64])
     """
 

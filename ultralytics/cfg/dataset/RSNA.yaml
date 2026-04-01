@@ -1,0 +1,8 @@
+path: E:\\daiyi\\python\\ultralytics\\ultralytics\\datasets\\RSNA
+train: train
+val: val
+test: val
+nc: 2
+names:
+  - Lung Opacity
+  - normal

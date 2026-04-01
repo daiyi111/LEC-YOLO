@@ -350,6 +350,7 @@ def check_det_dataset(dataset, autodownload=True):
     # Resolve paths
     path = Path(extract_dir or data.get("path") or Path(data.get("yaml_file", "")).parent)  # dataset root
     if not path.is_absolute():
+        # 如果不是绝对路径那么把visdrone.yaml的path改成绝对路径
         path = (DATASETS_DIR / path).resolve()
 
     # Set paths

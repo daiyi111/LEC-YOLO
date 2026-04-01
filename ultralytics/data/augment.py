@@ -863,6 +863,10 @@ class Mosaic(BaseMixTransform):
             final_labels["texts"] = mosaic_labels[0]["texts"]
         return final_labels
 
+        # >>> from ultralytics.data.augment import Mosaic
+        # >>> dataset = YourDataset(...)  # Your image dataset
+        # >>> mosaic_aug = Mosaic(dataset, imgsz=640, p=0.5, n=4)
+        # >>> augmented_labels = mosaic_aug(original_labels)
 
 class MixUp(BaseMixTransform):
     """

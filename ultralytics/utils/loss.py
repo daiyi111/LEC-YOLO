@@ -9,7 +9,7 @@ from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
 from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
 from ultralytics.utils.torch_utils import autocast
 
-from .metrics import bbox_iou, probiou
+from .metrics import bbox_iou, probiou,piou,shape_iou,class_and_pixel_based_bbox_iou,pixel_based_bbox_iou
 from .tal import bbox2dist
 
 
@@ -87,7 +87,7 @@ class DFLoss(nn.Module):
             + F.cross_entropy(pred_dist, tr.view(-1), reduction="none").view(tl.shape) * wr
         ).mean(-1, keepdim=True)
 
-
+# 边界框损失
 class BboxLoss(nn.Module):
     """Criterion class for computing training losses during training."""
 
@@ -96,12 +96,28 @@ class BboxLoss(nn.Module):
         super().__init__()
         self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
 
-    def forward(self, pred_dist, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask):
+    def forward(self, pred_dist, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask,stride_tensor):
         """IoU loss."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
-        iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+        # 这是源码使用CIOU
+        # iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+        # todo 基于像素的CIOU  pixel_based_bbox_iou
+        specific_target_bboxes=target_bboxes*stride_tensor
+        iou = pixel_based_bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], specific_target_bboxes[fg_mask],xywh=False, CIoU=True)
+        #下面1行代码使用piou
+        # iou=piou(pred_bboxes[fg_mask],target_bboxes[fg_mask],xywh=False,PIoU=True)
+        # 下面一行代码使用shape-iou
+        # iou=shape_iou(pred_bboxes[fg_mask],target_bboxes[fg_mask],xywh=False)
         loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
-
+        # 改用NWD
+        # loss_iou = 0
+        # iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+        # nwd = torch.exp(
+        #     -torch.pow(Wasserstein(pred_bboxes[fg_mask].T, target_bboxes[fg_mask], xywh=False), 1 / 2) / 1.0)
+        # # loss_iou = (((1.0 - iou) * weight).sum() / target_scores_sum ) * 0.5  +(((1.0 - nwd) * weight).sum() / target_scores_sum ) * 0.5
+        # loss_iou1 = ((1.0 - iou).mean()) * 0.5 + ((1.0 - nwd).mean()) * 0.5
+        #
+        # loss_iou = loss_iou + loss_iou1
         # DFL loss
         if self.dfl_loss:
             target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
@@ -111,8 +127,51 @@ class BboxLoss(nn.Module):
             loss_dfl = torch.tensor(0.0).to(pred_dist.device)
 
         return loss_iou, loss_dfl
+#todo 基于像素和类别的边界框损失函数
+class ClassAndPixelBasedBboxLoss(nn.Module):
+    """Criterion class for computing training losses during training."""
 
+    def __init__(self, reg_max=16):
+        """Initialize the BboxLoss module with regularization maximum and DFL settings."""
+        super().__init__()
+        self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
 
+    def forward(self, pred_dist, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask,stride_tensor,label_class_dict):
+        """IoU loss."""
+        weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
+        # todo 基于像素和类别的CIOU  class_and_pixel_based_bbox_iou
+        specific_target_bboxes=target_bboxes*stride_tensor
+        #ECIOU
+        iou = class_and_pixel_based_bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask],
+                                             specific_target_bboxes[fg_mask], target_scores[fg_mask], xywh=False,
+                                             EIoU=True, label_class_dict=label_class_dict)
+        # ciou
+        # iou = class_and_pixel_based_bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask],specific_target_bboxes[fg_mask],target_scores[fg_mask],xywh=False,CIoU=True,label_class_dict=label_class_dict)
+        # cpiou
+        # iou = class_and_pixel_based_bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask],specific_target_bboxes[fg_mask],target_scores[fg_mask],xywh=False,PIoU=True,class_based_iou=True,label_class_dict=label_class_dict)
+        #下面1行代码使用piou
+        # iou=piou(pred_bboxes[fg_mask],target_bboxes[fg_mask],xywh=False,PIoU=True)
+        # 下面一行代码使用shape-iou
+        # iou=shape_iou(pred_bboxes[fg_mask],target_bboxes[fg_mask],xywh=False)
+        loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+        # 改用NWD
+        # loss_iou = 0
+        # iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
+        # nwd = torch.exp(
+        #     -torch.pow(Wasserstein(pred_bboxes[fg_mask].T, target_bboxes[fg_mask], xywh=False), 1 / 2) / 1.0)
+        # # loss_iou = (((1.0 - iou) * weight).sum() / target_scores_sum ) * 0.5  +(((1.0 - nwd) * weight).sum() / target_scores_sum ) * 0.5
+        # loss_iou1 = ((1.0 - iou).mean()) * 0.5 + ((1.0 - nwd).mean()) * 0.5
+        #
+        # loss_iou = loss_iou + loss_iou1
+        # DFL loss
+        if self.dfl_loss:
+            target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
+            loss_dfl = self.dfl_loss(pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max), target_ltrb[fg_mask]) * weight
+            loss_dfl = loss_dfl.sum() / target_scores_sum
+        else:
+            loss_dfl = torch.tensor(0.0).to(pred_dist.device)
+
+        return loss_iou, loss_dfl
 class RotatedBboxLoss(BboxLoss):
     """Criterion class for computing training losses during training."""
 
@@ -153,7 +212,7 @@ class KeypointLoss(nn.Module):
         e = d / ((2 * self.sigmas).pow(2) * (area + 1e-9) * 2)  # from cocoeval
         return (kpt_loss_factor.view(-1, 1) * ((1 - torch.exp(-e)) * kpt_mask)).mean()
 
-
+# 重点
 class v8DetectionLoss:
     """Criterion class for computing training losses."""
 
@@ -174,7 +233,7 @@ class v8DetectionLoss:
         self.use_dfl = m.reg_max > 1
 
         self.assigner = TaskAlignedAssigner(topk=tal_topk, num_classes=self.nc, alpha=0.5, beta=6.0)
-        self.bbox_loss = BboxLoss(m.reg_max).to(device)
+        self.bbox_loss = ClassAndPixelBasedBboxLoss(m.reg_max).to(device)
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
 
     def preprocess(self, targets, batch_size, scale_tensor):
@@ -196,7 +255,7 @@ class v8DetectionLoss:
         return out
 
     def bbox_decode(self, anchor_points, pred_dist):
-        """Decode predicted object bounding box coordinates from anchor points and distribution."""
+        # 生成l t b r 通过矩阵乘法0 1 2 **** 15  8*8400*4*16----->8*8400*4
         if self.use_dfl:
             b, a, c = pred_dist.shape  # batch, anchors, channels
             pred_dist = pred_dist.view(b, a, 4, c // 4).softmax(3).matmul(self.proj.type(pred_dist.dtype))
@@ -246,12 +305,14 @@ class v8DetectionLoss:
         # Cls loss
         # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
         loss[1] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
-
+        # Bbox loss
+        # todo   给所有的类别进行一个权重分配，数目少的类别权重分配大一些，让模型按照这个方向学习
+        label_class_dict = batch["label_class_dict"]
         # Bbox loss
         if fg_mask.sum():
             target_bboxes /= stride_tensor
             loss[0], loss[2] = self.bbox_loss(
-                pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask
+                pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask,stride_tensor,label_class_dict
             )
 
         loss[0] *= self.hyp.box  # box gain
@@ -601,11 +662,10 @@ class v8PoseLoss(v8DetectionLoss):
 
 class v8ClassificationLoss:
     """Criterion class for computing training losses."""
-
     def __call__(self, preds, batch):
         """Compute the classification loss between predictions and true labels."""
         preds = preds[1] if isinstance(preds, (list, tuple)) else preds
-        loss = F.cross_entropy(preds, batch["cls"], reduction="mean")
+        loss = F.cross_entropy(preds, batch["cls"], reduction="mean",ignore_index=self.ignore_index)
         loss_items = loss.detach()
         return loss, loss_items
 
@@ -743,3 +803,22 @@ class E2EDetectLoss:
         one2one = preds["one2one"]
         loss_one2one = self.one2one(one2one, batch)
         return loss_one2many[0] + loss_one2one[0], loss_one2many[1] + loss_one2one[1]
+
+
+def Wasserstein(box1, box2, xywh=True):
+    box2 = box2.T
+    if xywh:
+        b1_cx, b1_cy = (box1[0] + box1[2]) / 2, (box1[1] + box1[3]) / 2
+        b1_w, b1_h = box1[2] - box1[0], box1[3] - box1[1]
+        b2_cx, b2_cy = (box2[0] + box2[0]) / 2, (box2[1] + box2[3]) / 2
+        b1_w, b1_h = box2[2] - box2[0], box2[3] - box2[1]
+    else:
+        b1_cx, b1_cy, b1_w, b1_h = box1[0], box1[1], box1[2], box1[3]
+        b2_cx, b2_cy, b2_w, b2_h = box2[0], box2[1], box2[2], box2[3]
+    cx_L2Norm = torch.pow((b1_cx - b2_cx), 2)
+    cy_L2Norm = torch.pow((b1_cy - b2_cy), 2)
+    p1 = cx_L2Norm + cy_L2Norm
+    w_FroNorm = torch.pow((b1_w - b2_w)/2, 2)
+    h_FroNorm = torch.pow((b1_h - b2_h)/2, 2)
+    p2 = w_FroNorm + h_FroNorm
+    return p1 + p2
